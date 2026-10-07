@@ -9,6 +9,7 @@
 
 用法: python setup_task.py            # 注册/覆盖两个任务
       python setup_task.py --remove   # 删除两个任务
+      python setup_task.py --query    # 查看状态
 """
 
 import argparse
@@ -26,6 +27,10 @@ PYTHONW = Path(sys.executable).with_name("pythonw.exe")
 if not PYTHONW.exists():
     PYTHONW = Path(sys.executable)
 
+# 每日任务起点明天 00:00（配合 RandomDelay 落在 0-2 点）;
+# 监听任务起点今天 00:00, 注册后立即生效
+START_DAILY, START_LOOP = "2026-10-08", "2026-10-07"
+
 XML_TEMPLATE = """<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -41,8 +46,8 @@ XML_TEMPLATE = """<?xml version="1.0" encoding="UTF-16"?>
     <AllowHardTerminate>true</AllowHardTerminate>
     <StartWhenAvailable>true</StartWhenAvailable>
     <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
-    <ExecutionTimeLimit>{limit}</ExecutionTimeLimit>
     <Enabled>true</Enabled>
+    <ExecutionTimeLimit>{limit}</ExecutionTimeLimit>
   </Settings>
   <Actions Context="Author">
     <Exec>
@@ -63,24 +68,24 @@ DAILY_TRIGGER = """<CalendarTrigger>
 
 LOOP_TRIGGER = """<TimeTrigger>
       <StartBoundary>{start}T00:00:00</StartBoundary>
-      <Enabled>true</Enabled>
       <Repetition>
         <Interval>PT1M</Interval>
         <StopAtDurationEnd>false</StopAtDurationEnd>
       </Repetition>
+      <Enabled>true</Enabled>
     </TimeTrigger>"""
 
 
 def schtasks(*args):
-    r = subprocess.run(["schtasks", *args], capture_output=True, text=True,
-                       timeout=30)
+    r = subprocess.run(["schtasks", *args], capture_output=True,
+                       encoding="gbk", errors="replace", timeout=30)
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
-def write_xml(path, desc, trigger, limit, cmd, args_, workdir):
-    xml = XML_TEMPLATE.format(desc=desc, trigger=trigger, limit=limit,
-                              cmd=cmd, args=args_, workdir=workdir,
-                              start="2026-10-08")
+def write_xml(path, desc, trigger, limit, cmd, args_, workdir, start):
+    trigger_xml = trigger.format(start=start)
+    xml = XML_TEMPLATE.format(desc=desc, trigger=trigger_xml, limit=limit,
+                              cmd=cmd, args=args_, workdir=workdir)
     # schtasks /XML 要求 UTF-16
     Path(path).write_text(xml, encoding="utf-16")
     return Path(path)
@@ -88,21 +93,20 @@ def write_xml(path, desc, trigger, limit, cmd, args_, workdir):
 
 def register():
     vbs = BASE / "run_daily.vbs"
-    xmls = []
 
-    xmls.append(write_xml(
+    xml_daily = write_xml(
         BASE / "task_daily.xml",
         "元宝福利中心每日打卡: 每天 00:00 + 随机 0~2 小时",
         DAILY_TRIGGER, "PT2H",
-        "wscript.exe", f'"{vbs}"', str(BASE)))
+        "wscript.exe", f'"{vbs}"', str(BASE), START_DAILY)
 
-    xmls.append(write_xml(
+    xml_loop = write_xml(
         BASE / "task_trigger.xml",
         "元宝远程触发监听: 每分钟检查 docs/trigger.json",
         LOOP_TRIGGER, "PT5M",
-        str(PYTHONW), "remote_listener.py --once", str(BASE)))
+        str(PYTHONW), "remote_listener.py --once", str(BASE), START_LOOP)
 
-    for xml, name in ((xmls[0], DAILY_TASK), (xmls[1], TRIGGER_TASK)):
+    for xml, name in ((xml_daily, DAILY_TASK), (xml_loop, TRIGGER_TASK)):
         code, out = schtasks("/Create", "/F", "/TN", name, "/XML", str(xml))
         print(f"[{name}] {'registered' if code == 0 else 'FAILED'} -> {out.strip()}")
         xml.unlink(missing_ok=True)
