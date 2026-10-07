@@ -31,6 +31,10 @@ import time
 import urllib.request
 from pathlib import Path
 
+# 本脚本由 pythonw 拉起, spawn 的控制台子进程(git 等)必须显式隐藏窗口,
+# 否则计划任务每分钟调一次就会闪一次黑框
+CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
 BASE = Path(__file__).resolve().parent
 REPO = "imiuim/yuanbao-checkin"
 BRANCH = "main"
@@ -47,7 +51,8 @@ def gh_token():
     inp = f"protocol=https\nhost=github.com\nusername={GH_USER}\n\n"
     try:
         p = subprocess.run(["git", "credential", "fill"], input=inp,
-                           capture_output=True, text=True, env=env, timeout=20)
+                           capture_output=True, text=True, env=env, timeout=20,
+                           creationflags=CREATE_NO_WINDOW)
         for line in p.stdout.splitlines():
             if line.startswith("password="):
                 return line.split("=", 1)[1]
@@ -100,7 +105,8 @@ def run_checkin(dry=False):
     try:
         exe = sys.executable or "python"
         r = subprocess.run([exe, "yuanbao_checkin.py"], cwd=BASE,
-                           capture_output=True, text=True, timeout=1800)
+                           capture_output=True, text=True, timeout=1800,
+                           creationflags=CREATE_NO_WINDOW)
         tail = (r.stdout or "").strip().splitlines()[-1:] or [""]
         return f"exit={r.returncode} {tail[0][:120]}"
     finally:

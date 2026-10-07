@@ -42,6 +42,9 @@ from pathlib import Path
 
 # ---------------- 配置 ----------------
 
+# 经 pythonw/隐藏 VBS 拉起时, adb/git 等控制台子进程必须显式隐藏, 否则闪黑框
+CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
 DEVICE = "192.168.31.7:41681"          # adb 设备序列号（WiFi ADB）
 APP_PKG = "com.tencent.hunyuan.app.chat"
 BASE = Path(__file__).resolve().parent
@@ -94,7 +97,8 @@ QUESTION_IMAGES = ["q1.png", "q2.png", "q3.png"]  # assets/ 下的题目图, 推
 
 def adb(*args, timeout=30):
     cmd = ["adb", "-s", DEVICE, *args]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                       creationflags=CREATE_NO_WINDOW)
     return r.stdout.strip()
 
 
@@ -120,7 +124,7 @@ def screenshot(name):
     shell(f"screencap -p {remote}")
     local = LOG_DIR / f"{name}.png"
     subprocess.run(["adb", "-s", DEVICE, "pull", remote, str(local)],
-                   capture_output=True)
+                   capture_output=True, creationflags=CREATE_NO_WINDOW)
     shell(f"rm -f {remote}")
     return local
 
@@ -246,7 +250,7 @@ def task_photo():
             continue
         dst = f"/sdcard/Pictures/auto_{name}"
         subprocess.run(["adb", "-s", DEVICE, "push", str(src), dst],
-                       capture_output=True)
+                       capture_output=True, creationflags=CREATE_NO_WINDOW)
         shell(f"am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE "
               f"-d file://{dst}", timeout=15)
         time.sleep(1)
@@ -321,17 +325,34 @@ def capture_points():
 
 def write_status(results):
     MONITOR_DIR.mkdir(exist_ok=True)
+    # 当日累计: --only 部分运行时保留当天已完成的其余任务状态, 跨天重置
+    path = MONITOR_DIR / "status.json"
+    tasks = {}
+    today = f"{datetime.datetime.now():%Y-%m-%d}"
+    try:
+        prev = json.loads(path.read_text(encoding="utf-8"))
+        if prev.get("run_date") == today:
+            tasks.update(prev.get("tasks", {}))
+    except Exception:
+        pass
+    # 当日已 done 的任务不被重跑的 error/device_offline 降级（奖励当天已领）
+    for k, v in results.items():
+        if tasks.get(k) == "done" and v != "done":
+            continue
+        tasks[k] = v
+
     status = {
         "app": "yuanbao-checkin",
         "account": ACCOUNT,
         "device": DEVICE,
+        "run_date": today,
         "last_run": datetime.datetime.now().isoformat(timespec="seconds"),
         "points_image": f"points.png?v={datetime.datetime.now():%Y%m%d%H%M%S}",
-        "tasks": results,
+        "tasks": tasks,
         "log": RUN_LOG[-60:],
     }
-    (MONITOR_DIR / "status.json").write_text(
-        json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(status, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
     log("status.json 已写入 docs/")
 
 
@@ -339,17 +360,21 @@ def push_status():
     """把 docs/（status+积分截图）提交并推送到 GitHub, 供线上监控页展示。"""
     try:
         subprocess.run(["git", "add", "-A", "docs/"], cwd=BASE, check=True,
-                       timeout=30, capture_output=True)
+                       timeout=30, capture_output=True,
+                       creationflags=CREATE_NO_WINDOW)
         c = subprocess.run(["git", *GIT_IDENTITY, "commit", "-m",
                             f"run: {datetime.datetime.now():%Y-%m-%d %H:%M:%S}"],
-                           cwd=BASE, capture_output=True, text=True, timeout=30)
+                           cwd=BASE, capture_output=True, text=True, timeout=30,
+                           creationflags=CREATE_NO_WINDOW)
         if c.returncode != 0 and "nothing to commit" not in c.stdout:
             log(f"git commit 异常: {c.stderr.strip()[:200]}")
         subprocess.run(["git", "-c", "http.proxy=", "-c", "https.proxy=",
                         "pull", "--rebase", "origin", "main"],
-                       cwd=BASE, capture_output=True, timeout=60)
+                       cwd=BASE, capture_output=True, timeout=60,
+                       creationflags=CREATE_NO_WINDOW)
         p = subprocess.run(["git", "-c", "http.proxy=", "-c", "https.proxy=",
-                            "push"], cwd=BASE, capture_output=True, timeout=90)
+                            "push"], cwd=BASE, capture_output=True, timeout=90,
+                           creationflags=CREATE_NO_WINDOW)
         log("git push " + ("成功" if p.returncode == 0
                            else f"失败: {p.stderr.decode(errors='ignore')[:200]}"))
     except Exception as e:
