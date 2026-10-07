@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>元宝打卡监控 · yuanbao-checkin</title>
+<style>
+  :root {
+    --bg: #0f1419; --card: #1a2129; --line: #2a3441;
+    --tx: #e6edf3; --dim: #8b98a5;
+    --ok: #3fb950; --err: #f85149; --wait: #d29922; --accent: #58a6ff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--tx);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    min-height: 100vh; padding: 24px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 22px; display: flex; align-items: center; gap: 10px; }
+  h1 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--dim); }
+  h1 .dot.live { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .sub { color: var(--dim); font-size: 13px; margin: 6px 0 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .card .name { font-weight: 600; margin-bottom: 6px; }
+  .badge {
+    display: inline-block; padding: 2px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 600;
+  }
+  .badge.done { background: rgba(63,185,80,.15); color: var(--ok); }
+  .badge.err  { background: rgba(248,81,73,.15);  color: var(--err); }
+  .badge.wait { background: rgba(210,153,34,.15); color: var(--wait); }
+  .panel {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; margin-top: 14px;
+  }
+  .panel h2 { font-size: 14px; color: var(--dim); margin-bottom: 8px; }
+  pre {
+    font-family: Consolas, "Courier New", monospace; font-size: 12px;
+    line-height: 1.7; color: var(--tx); white-space: pre-wrap; word-break: break-all;
+  }
+  .meta { color: var(--dim); font-size: 12px; margin-top: 10px; }
+  .errbox { color: var(--err); padding: 40px 0; text-align: center; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="dot" id="dot"></span>元宝每日打卡监控</h1>
+  <div class="sub">
+    读取同目录 <code>status.json</code>（由 <code>yuanbao_checkin.py</code> 每次运行后生成），
+    每 60 秒自动刷新。
+  </div>
+
+  <div class="grid" id="cards"></div>
+
+  <div class="panel">
+    <h2>运行日志（最近 60 条）</h2>
+    <pre id="log">加载中…</pre>
+    <div class="meta" id="meta"></div>
+  </div>
+</div>
+
+<script>
+const TASK_NAMES = {
+  checkin: "能力站打卡",
+  ask:     "趣问元宝 ×3",
+  write:   "写作能力 ×3",
+  photo:   "拍题能力 ×3",
+  pimage:  "P图能力 ×3",
+  join:    "体验优化计划",
+};
+
+function badge(state) {
+  if (state === "done") return '<span class="badge done">已完成</span>';
+  if (String(state).startsWith("error")) return '<span class="badge err">异常</span>';
+  if (state === "skip") return '<span class="badge wait">跳过</span>';
+  return '<span class="badge wait">未运行</span>';
+}
+
+function render(d) {
+  const cards = document.getElementById("cards");
+  cards.innerHTML = "";
+  const tasks = d.tasks || {};
+  for (const [key, label] of Object.entries(TASK_NAMES)) {
+    const state = tasks[key] || "未运行";
+    const div = document.createElement("div");
+    div.className = "card";
+    div.innerHTML = `<div class="name">${label}</div>${badge(state)}` +
+      (String(state).startsWith("error") ? `<div class="meta">${state}</div>` : "");
+    cards.appendChild(div);
+  }
+  document.getElementById("log").textContent =
+    (d.log && d.log.join("\n")) || "（暂无日志）";
+  document.getElementById("meta").innerHTML =
+    `设备: ${d.device || "-"} &nbsp;·&nbsp; 上次运行: ${d.last_run || "-"}`;
+  document.getElementById("dot").className = "dot live";
+}
+
+async function load() {
+  try {
+    const r = await fetch("status.json?ts=" + Date.now());
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    render(await r.json());
+  } catch (e) {
+    document.getElementById("log").innerHTML =
+      `<span class="errbox">读取 status.json 失败（${e.message}）。<br>` +
+      `本地预览请用: <code>python -m http.server -d monitor 8000</code> 后访问 ` +
+      `<a href="http://127.0.0.1:8000">http://127.0.0.1:8000</a></span>`;
+    document.getElementById("dot").className = "dot";
+  }
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
