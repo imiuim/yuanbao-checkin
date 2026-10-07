@@ -48,11 +48,11 @@ python yuanbao_checkin.py --device <serial>     # 指定设备
 
 ### 3. Web 监控页
 
-`monitor/index.html` 读取同目录 `status.json`（脚本每次运行后更新），60 秒自动刷新。
+`docs/index.html` 读取同目录 `status.json`（脚本每次运行后更新），60 秒自动刷新。
 
 - 本地预览：`python -m http.server -d monitor 8000` → http://127.0.0.1:8000
-- GitHub Pages：仓库 Settings → Pages → Deploy from branch → `main` + `/monitor`。
-  脚本运行后 `git add monitor/status.json && git commit && git push` 即可让线上监控页保持最新（可在计划任务后追加该命令）。
+- GitHub Pages：仓库 Settings → Pages → Deploy from branch → `main` + `/docs`。
+  脚本运行后 `git add docs/status.json && git commit && git push` 即可让线上监控页保持最新（可在计划任务后追加该命令）。
 
 ## 项目结构
 
@@ -62,8 +62,8 @@ yuanbao-checkin/
 ├── run_daily.vbs        # 计划任务无窗口启动器
 ├── setup_task.bat       # 注册每日计划任务
 ├── assets/q1..q3.png    # 拍题用题目图（推送到手机相册）
-├── monitor/index.html   # Web 监控页（自包含单文件）
-├── monitor/status.json  # 运行状态（脚本生成, 监控页读取）
+├── docs/index.html   # Web 监控页（自包含单文件）
+├── docs/status.json  # 运行状态（脚本生成, 监控页读取）
 └── logs/                # 运行截屏留档（gitignore）
 ```
 

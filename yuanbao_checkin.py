@@ -45,7 +45,7 @@ DEVICE = "192.168.31.7:41681"          # adb 设备序列号（WiFi ADB）
 APP_PKG = "com.tencent.hunyuan.app.chat"
 BASE = Path(__file__).resolve().parent
 LOG_DIR = BASE / "logs"
-MONITOR_DIR = BASE / "monitor"
+MONITOR_DIR = BASE / "docs"   # GitHub Pages 部署目录（Settings→Pages→/docs）
 ASSET_DIR = BASE / "assets"
 
 # 坐标表（1080x2400）
