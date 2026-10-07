@@ -12,9 +12,8 @@
   2. 趣问元宝得积分 x3（从福利页"去提问"入口进入才计数）
   3. 使用写作能力 x3（从"去写作"入口进入才计数）
   4. 使用拍题能力 x3（从"去拍题"入口进入才计数, 相册选预置题目图）
-  5. 使用P图能力 x3（从"去P图"入口; 相册选图后需要人工确认生成参数,
-     脚本自动选图并截屏留档, 如 UI 有变化请人工补点）
-  6. 参与体验优化计划（打开活动页留档）
+  5. 使用P图能力 x3（"去P图"入口 → 相册选图 → 智能P图页发送生成）
+  6. 参与体验优化计划（打开设置页留档; 隐私开关需用户手动开一次）
 
 重要经验（踩坑记录）:
   - 福利页是 H5, uiautomator 拿不到内部控件, 只能坐标点击。
@@ -62,9 +61,11 @@ COORDS = {
     "task_write":       (912, 910),    # 去写作
     "task_photo":       (912, 1123),   # 去拍题
     "task_pimage":      (912, 1336),   # 去P图
-    "camera_gallery":   (220, 2090),   # 拍题/相机页左下角相册缩略图
+    "camera_gallery":   (220, 2090),   # 拍题相机页左下角相册缩略图
     "picker_first":     (138, 366),    # 相册选择器第一个缩略图
+    "picker_first_r2":  (396, 540),    # P图选择器第二格（第一格是"相机"块）
     "crop_confirm":     (540, 2192),   # 拍题裁剪页"确认"
+    "pimage_send":      (952, 1298),   # 智能P图页发送按钮
     "write_input":      (444, 2230),   # AI写作 输入框
     "write_send":       (960, 1280),   # AI写作 发送(键盘弹起时)
 }
@@ -210,11 +211,18 @@ def task_write():
 
 
 def task_photo():
-    pushed = push_question_images()
-    if pushed == 0:
-        log("无题目图可用, 拍题任务跳过")
-        return
-    for i in range(1, 4):
+    """拍题: 每轮推送一张全新题目图(保证在相册选择器最前), 从"去拍题"入口进入。"""
+    for i, name in enumerate(QUESTION_IMAGES, 1):
+        src = ASSET_DIR / name
+        if not src.exists():
+            log(f"缺少题目图 {src}, 第{i}轮跳过")
+            continue
+        dst = f"/sdcard/Pictures/auto_{name}"
+        subprocess.run(["adb", "-s", DEVICE, "push", str(src), dst],
+                       capture_output=True)
+        shell(f"am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE "
+              f"-d file://{dst}", timeout=15)
+        time.sleep(1)
         goto_welfare()
         tap(*COORDS["task_photo"])
         time.sleep(3.5)                    # 相机页
@@ -223,33 +231,36 @@ def task_photo():
         tap(*COORDS["picker_first"])       # 最新推送的题目图在最前
         time.sleep(2.5)                    # 裁剪页
         tap(*COORDS["crop_confirm"])
-        time.sleep(10)                     # 生成开始
+        time.sleep(10)                     # 生成开始即计数
         screenshot(f"photo_round{i}")
         log(f"拍题 第{i}次已提交")
 
 
 def task_pimage():
-    """P图: 打开入口 → 相册选图。选图后的模板/生成按钮因版本而异,
-    脚本截屏留档, 剩余步骤参考 README 人工补点或按日志校准坐标。"""
+    """P图: "去P图"直接打开相册选择器(本地相册) → 选图 → 智能P图页点发送。
+    选图坐标取第二格(第一格是"相机"块), 若相册缩略图布局变化需重新标定。"""
     for i in range(1, 4):
         goto_welfare()
         tap(*COORDS["task_pimage"])
-        time.sleep(3.5)
-        tap(*COORDS["camera_gallery"])
-        time.sleep(3)
-        tap(*COORDS["picker_first"])
-        time.sleep(3)
+        time.sleep(3.5)                    # 本地相册选择器
+        tap(*COORDS["picker_first_r2"])
+        time.sleep(3)                      # 智能P图编辑页, 图片1已挂上
+        tap(*COORDS["pimage_send"])
+        time.sleep(12)                     # 生成
         screenshot(f"pimage_round{i}")
-        log(f"P图 第{i}次: 已选图, 请按日志截屏核对生成是否完成")
+        log(f"P图 第{i}次已提交")
 
 
 def task_join():
+    """体验优化计划: 仅打开设置页并留档。
+    注意: 计数需要开启"体验优化计划"开关, 这涉及数据使用授权,
+    由用户手动开启一次即可（之后每日无需再做）。脚本不代开隐私开关。"""
     goto_welfare()
     tap(*COORDS["task_join"])
     time.sleep(3)
     screenshot("join_page")
     keyevent(4)
-    log("体验优化计划: 活动页已打开并留档（如需填表请人工完成）")
+    log("体验优化计划: 设置页已打开并留档（开关请用户手动确认）")
 
 
 TASKS = {
