@@ -91,7 +91,20 @@ def write_xml(path, desc, trigger, limit, cmd, args_, workdir, start):
     return Path(path)
 
 
+def write_vbs():
+    """生成 run_daily.vbs: 写死 pythonw 绝对路径。
+    计划任务环境的 PATH 与交互 shell 不同, 裸写 pythonw 会解析失败。"""
+    vbs = f'''\' 元宝每日打卡 - 隐藏窗口启动器（由 setup_task.py 生成, 勿手改）
+Set sh = CreateObject("WScript.Shell")
+sh.CurrentDirectory = "{BASE}"
+sh.Run """{PYTHONW}"" yuanbao_checkin.py", 0, False
+'''
+    (BASE / "run_daily.vbs").write_text(vbs, encoding="utf-8")
+    print(f"run_daily.vbs -> pythonw: {PYTHONW}")
+
+
 def register():
+    write_vbs()
     vbs = BASE / "run_daily.vbs"
 
     xml_daily = write_xml(
