@@ -1,0 +1,7 @@
+{
+  "run": false,
+  "note": "把 run 改为 true 并 Commit 即可远程触发打卡; 电脑监听器每分钟检查一次, 24h 内有效",
+  "requested_at": null,
+  "last_completed": null,
+  "last_result": null
+}

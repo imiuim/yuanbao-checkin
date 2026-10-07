@@ -26,11 +26,13 @@
   python yuanbao_checkin.py --only checkin ask write  # 只跑部分任务
   python yuanbao_checkin.py --device 192.168.31.7:41681
 输出:
-  monitor/status.json  —— 供 Web 监控页读取
+  docs/status.json     —— 供 Web 监控页读取（运行后自动 commit+push）
+  docs/points.png      —— 福利页积分余额截图（监控页展示）
   logs/                —— 每步截屏留档
 """
 
 import argparse
+import configparser
 import datetime
 import json
 import subprocess
@@ -46,6 +48,15 @@ BASE = Path(__file__).resolve().parent
 LOG_DIR = BASE / "logs"
 MONITOR_DIR = BASE / "docs"   # GitHub Pages 部署目录（Settings→Pages→/docs）
 ASSET_DIR = BASE / "assets"
+LOCK = BASE / ".run.lock"
+GIT_IDENTITY = ["-c", "user.name=刘演",
+                "-c", "user.email=79697331+ovlineen@users.noreply.github.com"]
+
+# 可选 config.ini:
+#   [account] name = 用户a797
+_cfg = configparser.ConfigParser()
+_cfg.read(BASE / "config.ini", encoding="utf-8")
+ACCOUNT = _cfg.get("account", "name", fallback="用户a797")
 
 # 坐标表（1080x2400）
 COORDS = {
@@ -120,6 +131,40 @@ def scroll_down(times=2):
         time.sleep(1.2)
 
 
+def ensure_connected():
+    """WiFi ADB 重连; 失败则尝试 mDNS 发现新的无线调试端口。返回是否可用。"""
+    out = adb("devices", timeout=15)
+    if DEVICE in out and "\tdevice" in out:
+        return True
+    adb("connect", DEVICE, timeout=15)
+    out = adb("devices", timeout=15)
+    if DEVICE in out and "\tdevice" in out:
+        return True
+    # 尝试 mDNS 自动发现 (需手机"无线调试"开启): _adb-tls-connect._tcp
+    try:
+        services = adb("mdns", "services", timeout=15)
+        for line in services.splitlines():
+            if "_adb-tls-connect" in line:
+                cand = line.split()[-2] if len(line.split()) >= 2 else None
+                if cand and ":" in cand:
+                    adb("connect", cand, timeout=15)
+                    out = adb("devices", timeout=15)
+                    if cand in out and "\tdevice" in out:
+                        globals()["DEVICE"] = cand
+                        return True
+    except Exception:
+        pass
+    return False
+
+
+def wake_device():
+    """点亮屏幕并上滑解锁（无密码锁屏时有效）。"""
+    shell("input keyevent 224")            # KEYCODE_WAKEUP
+    time.sleep(1.5)
+    swipe(540, 2000, 540, 900, 300)        # 上滑
+    time.sleep(1.5)
+
+
 # ---------------- 流程 ----------------
 
 RUN_LOG = []
@@ -151,24 +196,6 @@ def grant_permissions():
                  "android.permission.READ_MEDIA_IMAGES",
                  "android.permission.READ_EXTERNAL_STORAGE"):
         shell(f"pm grant {APP_PKG} {perm}", timeout=15)
-
-
-def push_question_images():
-    """把 assets 下的题目图推送到相册并触发媒体扫描。"""
-    pushed = 0
-    for name in QUESTION_IMAGES:
-        src = ASSET_DIR / name
-        if not src.exists():
-            log(f"缺少题目图 {src}, 跳过推送")
-            continue
-        dst = f"/sdcard/Pictures/{name}"
-        subprocess.run(["adb", "-s", DEVICE, "push", str(src), dst],
-                       capture_output=True)
-        shell(f"am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE "
-              f"-d file://{dst}", timeout=15)
-        pushed += 1
-    log(f"题目图推送 {pushed}/{len(QUESTION_IMAGES)}")
-    return pushed
 
 
 # ---- 各任务实现 ----
@@ -273,18 +300,60 @@ TASKS = {
 }
 
 
+def capture_points():
+    """回福利页顶部, 截取积分余额条 -> docs/points.png（监控页展示）。"""
+    goto_welfare()
+    for _ in range(4):                     # 回到页面顶部
+        swipe(540, 600, 540, 1900, 300)
+        time.sleep(0.8)
+    time.sleep(1.5)
+    local = screenshot("points_full")
+    try:
+        from PIL import Image
+        img = Image.open(local)
+        # 积分余额条 "✦ NNNNN" 区域（1080x2400 实测）
+        img.crop((40, 315, 430, 455)).save(
+            MONITOR_DIR / "points.png", quality=88)
+        log("积分余额截图已更新 docs/points.png")
+    except Exception as e:
+        log(f"积分截图裁剪失败(不影响任务): {e}")
+
+
 def write_status(results):
     MONITOR_DIR.mkdir(exist_ok=True)
     status = {
         "app": "yuanbao-checkin",
+        "account": ACCOUNT,
         "device": DEVICE,
         "last_run": datetime.datetime.now().isoformat(timespec="seconds"),
+        "points_image": f"points.png?v={datetime.datetime.now():%Y%m%d%H%M%S}",
         "tasks": results,
         "log": RUN_LOG[-60:],
     }
     (MONITOR_DIR / "status.json").write_text(
         json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
-    log("status.json 已写入 monitor/")
+    log("status.json 已写入 docs/")
+
+
+def push_status():
+    """把 docs/（status+积分截图）提交并推送到 GitHub, 供线上监控页展示。"""
+    try:
+        subprocess.run(["git", "add", "-A", "docs/"], cwd=BASE, check=True,
+                       timeout=30, capture_output=True)
+        c = subprocess.run(["git", *GIT_IDENTITY, "commit", "-m",
+                            f"run: {datetime.datetime.now():%Y-%m-%d %H:%M:%S}"],
+                           cwd=BASE, capture_output=True, text=True, timeout=30)
+        if c.returncode != 0 and "nothing to commit" not in c.stdout:
+            log(f"git commit 异常: {c.stderr.strip()[:200]}")
+        subprocess.run(["git", "-c", "http.proxy=", "-c", "https.proxy=",
+                        "pull", "--rebase", "origin", "main"],
+                       cwd=BASE, capture_output=True, timeout=60)
+        p = subprocess.run(["git", "-c", "http.proxy=", "-c", "https.proxy=",
+                            "push"], cwd=BASE, capture_output=True, timeout=90)
+        log("git push " + ("成功" if p.returncode == 0
+                           else f"失败: {p.stderr.decode(errors='ignore')[:200]}"))
+    except Exception as e:
+        log(f"推送状态失败(不影响任务): {e}")
 
 
 def main():
@@ -296,11 +365,23 @@ def main():
     args = ap.parse_args()
     DEVICE = args.device
 
-    results = {}
-    log(f"开始执行, 设备 {DEVICE}, 任务 {args.only}")
-    grant_permissions()
+    if LOCK.exists():
+        log("检测到 .run.lock, 已有任务在运行, 本次退出")
+        return
+    LOCK.write_text(str(time.time()))
 
+    results = {}
     try:
+        log(f"开始执行, 设备 {DEVICE}, 任务 {args.only}")
+        if not ensure_connected():
+            log("设备不可达: 请确认手机与电脑同一 WiFi、无线调试已开启;"
+                "若端口变化请更新 --device 或依赖 mDNS 自动发现")
+            write_status({k: "device_offline" for k in args.only})
+            push_status()
+            return
+        wake_device()
+        grant_permissions()
+
         for name in args.only:
             fn = TASKS[name]
             try:
@@ -310,8 +391,12 @@ def main():
                 results[name] = f"error: {e}"
                 log(f"任务 {name} 异常: {e}")
                 screenshot(f"error_{name}")
+
+        capture_points()
     finally:
         write_status(results)
+        push_status()
+        LOCK.unlink(missing_ok=True)
 
     log("全部结束")
 

@@ -17,9 +17,16 @@
     min-height: 100vh; padding: 24px;
   }
   .wrap { max-width: 860px; margin: 0 auto; }
-  h1 { font-size: 22px; display: flex; align-items: center; gap: 10px; }
+  h1 { font-size: 22px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   h1 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--dim); }
   h1 .dot.live { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .badge {
+    display: inline-block; padding: 2px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; vertical-align: middle;
+  }
+  .badge.done { background: rgba(63,185,80,.15); color: var(--ok); }
+  .badge.err  { background: rgba(248,81,73,.15);  color: var(--err); }
+  .badge.wait { background: rgba(210,153,34,.15); color: var(--wait); }
   .sub { color: var(--dim); font-size: 13px; margin: 6px 0 20px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
   .card {
@@ -27,13 +34,13 @@
     border-radius: 10px; padding: 14px 16px;
   }
   .card .name { font-weight: 600; margin-bottom: 6px; }
-  .badge {
-    display: inline-block; padding: 2px 10px; border-radius: 999px;
-    font-size: 12px; font-weight: 600;
+  .points-card { grid-column: 1 / -1; display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+  .points-card img {
+    height: 52px; border-radius: 8px; border: 1px solid var(--line);
+    background: #fff; image-rendering: auto;
   }
-  .badge.done { background: rgba(63,185,80,.15); color: var(--ok); }
-  .badge.err  { background: rgba(248,81,73,.15);  color: var(--err); }
-  .badge.wait { background: rgba(210,153,34,.15); color: var(--wait); }
+  .kv { font-size: 13px; color: var(--dim); line-height: 1.9; }
+  .kv b { color: var(--tx); font-weight: 600; }
   .panel {
     background: var(--card); border: 1px solid var(--line);
     border-radius: 10px; padding: 14px 16px; margin-top: 14px;
@@ -46,17 +53,43 @@
   .meta { color: var(--dim); font-size: 12px; margin-top: 10px; }
   .errbox { color: var(--err); padding: 40px 0; text-align: center; }
   a { color: var(--accent); }
+  .btn {
+    display: inline-block; padding: 10px 18px; border-radius: 8px;
+    background: var(--accent); color: #04121f; font-weight: 700;
+    text-decoration: none; font-size: 14px;
+  }
+  .btn:hover { filter: brightness(1.1); }
+  .steps { color: var(--dim); font-size: 13px; line-height: 2; margin-top: 10px; }
+  .steps code {
+    background: #0d1117; border: 1px solid var(--line);
+    padding: 1px 6px; border-radius: 5px; font-size: 12px;
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1><span class="dot" id="dot"></span>元宝每日打卡监控</h1>
+  <h1>
+    <span class="dot" id="dot"></span>元宝每日打卡监控
+    <span class="badge wait" id="todayBadge">…</span>
+  </h1>
   <div class="sub">
-    读取同目录 <code>status.json</code>（由 <code>yuanbao_checkin.py</code> 每次运行后生成），
-    每 60 秒自动刷新。
+    账号任务由电脑端 <code>yuanbao_checkin.py</code> 每日 0-2 点随机执行；
+    结果写入 <code>status.json</code> / <code>points.png</code> 并推送到本页面。
   </div>
 
   <div class="grid" id="cards"></div>
+
+  <div class="panel">
+    <h2>远程触发</h2>
+    <a class="btn" id="triggerBtn"
+       href="https://github.com/imiuim/yuanbao-checkin/edit/main/docs/trigger.json"
+       target="_blank" rel="noopener">⚡ 立即远程触发</a>
+    <div class="steps">
+      1. 点击按钮打开 GitHub 编辑页 → 2. 把 <code>"run": false</code> 改为 <code>"run": true</code> →
+      3. 点 <code>Commit changes</code> → 电脑监听器 60 秒内执行，本页约 1-2 分钟后刷新结果。<br>
+      上次触发: <span id="triggerInfo">…</span>
+    </div>
+  </div>
 
   <div class="panel">
     <h2>运行日志（最近 60 条）</h2>
@@ -78,14 +111,37 @@ const TASK_NAMES = {
 function badge(state) {
   if (state === "done") return '<span class="badge done">已完成</span>';
   if (String(state).startsWith("error")) return '<span class="badge err">异常</span>';
+  if (String(state).startsWith("device_offline")) return '<span class="badge err">设备离线</span>';
   if (state === "skip") return '<span class="badge wait">跳过</span>';
   return '<span class="badge wait">未运行</span>';
 }
 
-function render(d) {
+function sameDay(iso) {
+  if (!iso) return false;
+  const d = new Date(iso), now = new Date();
+  return d.getFullYear() === now.getFullYear() &&
+         d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+}
+
+function render(status, trig) {
   const cards = document.getElementById("cards");
-  cards.innerHTML = "";
-  const tasks = d.tasks || {};
+
+  // 积分 / 账号卡
+  const pc = document.createElement("div");
+  pc.className = "card points-card";
+  const imgTs = (status.points_image || "points.png").split("?v=")[1] || "";
+  pc.innerHTML = `
+    <img src="points.png?v=${imgTs || Date.now()}" alt="积分余额"
+         onerror="this.style.display='none'">
+    <div class="kv">
+      账号 <b>${status.account || "-"}</b><br>
+      积分见左侧余额截图（每次运行后自动更新）<br>
+      上次运行 <b>${status.last_run || "-"}</b>
+    </div>`;
+  cards.appendChild(pc);
+
+  // 任务卡
+  const tasks = status.tasks || {};
   for (const [key, label] of Object.entries(TASK_NAMES)) {
     const state = tasks[key] || "未运行";
     const div = document.createElement("div");
@@ -94,22 +150,49 @@ function render(d) {
       (String(state).startsWith("error") ? `<div class="meta">${state}</div>` : "");
     cards.appendChild(div);
   }
+
+  // 今日徽标
+  const tb = document.getElementById("todayBadge");
+  if (sameDay(status.last_run)) {
+    tb.textContent = "今日已完成";
+    tb.className = "badge done";
+  } else {
+    tb.textContent = "今日未运行";
+    tb.className = "badge wait";
+  }
+
+  // 触发信息
+  const ti = document.getElementById("triggerInfo");
+  if (trig) {
+    ti.textContent = trig.run ? "有未处理的触发请求"
+      : `完成于 ${trig.last_completed || "无"}（${trig.last_result || "-"}）`;
+  } else {
+    ti.textContent = "无记录";
+  }
+
   document.getElementById("log").textContent =
-    (d.log && d.log.join("\n")) || "（暂无日志）";
+    (status.log && status.log.join("\n")) || "（暂无日志）";
   document.getElementById("meta").innerHTML =
-    `设备: ${d.device || "-"} &nbsp;·&nbsp; 上次运行: ${d.last_run || "-"}`;
+    `设备: ${status.device || "-"} &nbsp;·&nbsp; 计划: 每天 00:00-02:00 随机执行`;
   document.getElementById("dot").className = "dot live";
+}
+
+async function loadJson(url) {
+  const r = await fetch(url + "?ts=" + Date.now());
+  if (!r.ok) throw new Error(url + " HTTP " + r.status);
+  return r.json();
 }
 
 async function load() {
   try {
-    const r = await fetch("status.json?ts=" + Date.now());
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    render(await r.json());
+    const [status, trig] = await Promise.all([
+      loadJson("status.json"), loadJson("trigger.json").catch(() => null)
+    ]);
+    render(status, trig);
   } catch (e) {
     document.getElementById("log").innerHTML =
-      `<span class="errbox">读取 status.json 失败（${e.message}）。<br>` +
-      `本地预览请用: <code>python -m http.server -d monitor 8000</code> 后访问 ` +
+      `<span class="errbox">读取数据失败（${e.message}）。<br>` +
+      `本地预览: <code>python -m http.server -d docs 8000</code> → ` +
       `<a href="http://127.0.0.1:8000">http://127.0.0.1:8000</a></span>`;
     document.getElementById("dot").className = "dot";
   }

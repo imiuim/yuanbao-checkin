@@ -2,3 +2,6 @@ logs/
 __pycache__/
 *.pyc
 .yuanbao-tmp/
+.run.lock
+task_daily.xml
+task_trigger.xml
